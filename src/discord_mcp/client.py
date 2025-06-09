@@ -97,7 +97,11 @@ async def _check_logged_in(state: ClientState) -> bool:
         await state.page.goto(
             "https://discord.com/channels/@me", wait_until="domcontentloaded"
         )
-        await asyncio.sleep(3)
+        await state.page.wait_for_selector(
+            '[data-list-id="guildsnav"] [role="treeitem"]',
+            state="visible",
+            timeout=15000,
+        )
         current_url = state.page.url
 
         if "/login" in current_url or "/register" in current_url:
@@ -197,10 +201,24 @@ async def clear_cookies(state: ClientState) -> ClientState:
 
 
 async def close_client(state: ClientState) -> None:
-    if state.browser:
-        await state.browser.close()
-    if state.playwright:
-        await state.playwright.stop()
+    print("🔄 close_client: Starting cleanup...")
+    try:
+        if state.browser:
+            print("🔄 close_client: Closing browser...")
+            await state.browser.close()
+            print("✅ close_client: Browser closed")
+    except Exception as e:
+        print(f"⚠️ close_client: Error closing browser: {e}")
+
+    try:
+        if state.playwright:
+            print("🔄 close_client: Stopping playwright...")
+            await state.playwright.stop()
+            print("✅ close_client: Playwright stopped")
+    except Exception as e:
+        print(f"⚠️ close_client: Error stopping playwright: {e}")
+
+    print("✅ close_client: Cleanup complete")
 
 
 def reset_client_state(state: ClientState) -> ClientState:
@@ -215,55 +233,139 @@ async def get_guilds(state: ClientState) -> tuple[ClientState, list[DiscordGuild
     await state.page.goto(
         "https://discord.com/channels/@me", wait_until="domcontentloaded"
     )
-    await asyncio.sleep(3)
 
+    # Wait for Discord to fully load guilds with text content
     try:
         await state.page.wait_for_selector(
-            '[data-list-id="guildsnav"] [role="treeitem"]', timeout=10000
+            '[data-list-id="guildsnav"] [role="treeitem"]',
+            state="visible",
+            timeout=15000,
+        )
+        # Give extra time for guild names to load
+        await state.page.wait_for_timeout(3000)
+
+        # Wait for at least one guild element to have text or aria-label
+        await state.page.wait_for_function(
+            """
+            () => {
+                const elements = document.querySelectorAll('[data-list-id="guildsnav"] [role="treeitem"]');
+                return Array.from(elements).some(el => 
+                    el.textContent?.trim() || el.getAttribute('aria-label')
+                );
+            }
+        """,
+            timeout=10000,
         )
     except Exception as e:
-        await asyncio.sleep(5)
-        try:
-            await state.page.wait_for_selector(
-                '[data-list-id="guildsnav"] [role="treeitem"]', timeout=10000
-            )
-        except Exception:
-            raise RuntimeError(f"Could not find guild navigation elements: {e}")
+        print(f"Warning: Could not find guild navigation elements with content: {e}")
+        # Continue anyway, we'll try different selectors
 
-    guild_elements = await state.page.query_selector_all(
-        '[data-list-id="guildsnav"] [role="treeitem"]'
-    )
-    guilds = []
+    # Use JavaScript to extract guild information directly without clicking each one
+    guilds_data = await state.page.evaluate("""
+        () => {
+            const guilds = [];
+            
+            // Look for guild elements with data-dnd-name
+            const elements = document.querySelectorAll('[data-list-id="guildsnav"] [data-dnd-name]:not([data-dnd-name="Private channels"])');
+            
+            elements.forEach(element => {
+                const text = element.textContent?.trim();
+                const ariaLabel = element.getAttribute('aria-label');
+                const displayText = text || ariaLabel || '';
+                
+                // Skip non-guild elements
+                if (!displayText || 
+                    displayText.toLowerCase().includes('direct messages') ||
+                    displayText.toLowerCase().includes('create') ||
+                    displayText.toLowerCase().includes('add') ||
+                    displayText.toLowerCase().includes('explore') ||
+                    displayText.toLowerCase().includes('download') ||
+                    displayText.toLowerCase().includes('discover') ||
+                    displayText.toLowerCase().includes('browse') ||
+                    displayText.toLowerCase().includes('join a server')) {
+                    return;
+                }
+                
+                // Try to find a link to extract guild ID
+                const link = element.querySelector('a[href*="/channels/"]') || element.closest('a[href*="/channels/"]');
+                if (link) {
+                    const href = link.getAttribute('href');
+                    const match = href.match(/\\/channels\\/([0-9]+)/);
+                    if (match && match[1] !== '@me') {
+                        const guildId = match[1];
+                        let guildName = displayText.replace(/^\\d+\\s+mentions?,\\s*/, '').trim();
+                        
+                        guilds.push({
+                            id: guildId,
+                            name: guildName
+                        });
+                    }
+                }
+            });
+            
+            return guilds;
+        }
+    """)
 
-    for element in guild_elements:
-        try:
-            text_content = await element.text_content()
-            if not text_content or "Direct Messages" in text_content:
+    guild_elements = []
+    if len(guilds_data) == 0:
+        # Fallback: try clicking approach for a few elements
+        all_elements = await state.page.query_selector_all(
+            '[data-list-id="guildsnav"] [data-dnd-name]:not([data-dnd-name="Private channels"])'
+        )
+        guild_elements = all_elements[:5]  # Only try first 5 elements
+
+    # Convert JavaScript results to DiscordGuild objects
+    guilds = [
+        DiscordGuild(id=guild_data["id"], name=guild_data["name"], icon=None)
+        for guild_data in guilds_data
+    ]
+
+    # If JavaScript approach didn't work, fall back to clicking approach (limited)
+    if len(guilds) == 0 and len(guild_elements) > 0:
+        for element in guild_elements:
+            try:
+                text_content = await element.text_content()
+                aria_label = await element.get_attribute("aria-label")
+                display_text = text_content or aria_label or ""
+
+                # Skip non-guild elements
+                if not display_text or any(
+                    skip_text in display_text.lower()
+                    for skip_text in [
+                        "direct messages",
+                        "create",
+                        "add a server",
+                        "explore",
+                        "download",
+                        "discover",
+                        "browse",
+                        "join a server",
+                        "create your server",
+                    ]
+                ):
+                    continue
+
+                await element.click()
+                await state.page.wait_for_timeout(500)
+
+                current_url = state.page.url
+                guild_match = re.search(r"/channels/([0-9]+)", current_url)
+
+                if guild_match and guild_match.group(1) != "@me":
+                    guild_id = guild_match.group(1)
+                    guild_name = display_text.strip()
+                    guild_name = re.sub(r"^\d+\s+mentions?,\s*", "", guild_name)
+                    guilds.append(DiscordGuild(id=guild_id, name=guild_name, icon=None))
+
+            except Exception:
                 continue
-
-            await element.click()
-            await asyncio.sleep(1)
-
-            current_url = state.page.url
-            guild_match = re.search(r"/channels/([0-9]+)", current_url)
-
-            if guild_match and guild_match.group(1) != "@me":
-                guild_id = guild_match.group(1)
-
-                guild_name = text_content.strip()
-                guild_name = re.sub(r"^\d+\s+mentions?,\s*", "", guild_name)
-
-                guilds.append(DiscordGuild(id=guild_id, name=guild_name, icon=None))
-
-        except Exception:
-            continue
 
     await state.page.goto(
         "https://discord.com/channels/@me", wait_until="domcontentloaded"
     )
-    await asyncio.sleep(2)
     await state.page.wait_for_selector(
-        '[data-list-id="guildsnav"] [role="treeitem"]', timeout=10000
+        '[data-list-id="guildsnav"] [role="treeitem"]', state="visible", timeout=10000
     )
 
     return state, guilds
@@ -272,21 +374,29 @@ async def get_guilds(state: ClientState) -> tuple[ClientState, list[DiscordGuild
 async def get_guild_channels(
     state: ClientState, guild_id: str
 ) -> tuple[ClientState, list[DiscordChannel]]:
+    print(f"📁 get_guild_channels: Starting for guild {guild_id}")
     state = await _login(state)
     if not state.page:
         raise RuntimeError("Browser page not initialized")
 
+    print(f"📁 get_guild_channels: Navigating to guild {guild_id}")
     # Navigate directly to guild
     await state.page.goto(
         f"https://discord.com/channels/{guild_id}", wait_until="domcontentloaded"
     )
-    await asyncio.sleep(2)
+    print("📁 get_guild_channels: Page loaded, waiting for channel links")
+    await state.page.wait_for_selector(
+        f'a[href*="/channels/{guild_id}/"]', timeout=15000
+    )
+    print("📁 get_guild_channels: Channel links found")
 
     # Verify we're in the correct guild
     current_url = state.page.url
+    print(f"📁 get_guild_channels: Current URL: {current_url}")
     if f"/channels/{guild_id}" not in current_url:
         raise RuntimeError(f"Could not navigate to guild {guild_id}")
 
+    print("📁 get_guild_channels: Extracting channels from page")
     # Extract channels from page
     channels_data = await state.page.evaluate(f"""
         () => {{
@@ -340,6 +450,9 @@ async def get_guild_channels(
             return channels;
         }}
     """)
+    print(
+        f"📁 get_guild_channels: JavaScript extraction returned {len(channels_data)} channels"
+    )
 
     channels = [
         DiscordChannel(
@@ -350,6 +463,7 @@ async def get_guild_channels(
         )
         for channel_data in channels_data
     ]
+    print(f"📁 get_guild_channels: Created {len(channels)} DiscordChannel objects")
 
     return state, channels
 
@@ -448,8 +562,8 @@ async def get_channel_messages(
                 continue
 
         if collected < limit and len(message_elements) > 0:
-            await state.page.keyboard.press("PageUp")
-            await asyncio.sleep(1)
+            await message_elements[0].scroll_into_view_if_needed()
+            await state.page.wait_for_timeout(500)
         else:
             break
 

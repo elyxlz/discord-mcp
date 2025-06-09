@@ -50,8 +50,6 @@ async def discord_client(real_config):
     await close_client(client_state)
 
 
-
-
 @pytest.fixture(autouse=True)
 def setup_test_environment():
     """Setup test environment before each test."""

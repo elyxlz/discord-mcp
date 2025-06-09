@@ -16,12 +16,12 @@ async def test_mcp_get_servers_tool(real_config):
 
     servers_data = json.loads(result[0].text)  # type: ignore
     print(f"Servers response: {servers_data}")
-    
+
     # Check if it's an error response
     if isinstance(servers_data, dict) and "error" in servers_data:
         print(f"Error in response: {servers_data['error']}")
         raise Exception(f"Tool returned error: {servers_data['error']}")
-    
+
     assert isinstance(servers_data, list)
     assert len(servers_data) > 0
     print(f"MCP server found {len(servers_data)} guilds")
