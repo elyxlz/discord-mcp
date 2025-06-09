@@ -2,8 +2,11 @@ import pytest
 import pytest_asyncio
 import asyncio
 import os
+from dotenv import load_dotenv
 from src.discord_mcp.client import create_client_state, close_client
 from src.discord_mcp.config import DiscordConfig
+
+load_dotenv()
 
 
 @pytest.fixture(scope="session")
@@ -28,7 +31,7 @@ def real_config():
     return DiscordConfig(
         email=email,
         password=password,
-        headless=False,  # Always use headful for testing
+        headless=True,  # Use headless for testing in CI environment
         default_guild_ids=["780179350682599445"],
         max_messages_per_channel=50,
         default_hours_back=24,
@@ -53,6 +56,6 @@ async def discord_client(real_config):
 @pytest.fixture(autouse=True)
 def setup_test_environment():
     """Setup test environment before each test."""
-    # Ensure we're in headful mode for all tests
-    os.environ["DISCORD_HEADLESS"] = "false"
+    # Ensure we're in headless mode for CI testing
+    os.environ["DISCORD_HEADLESS"] = "true"
     yield

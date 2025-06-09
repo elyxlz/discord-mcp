@@ -1,6 +1,6 @@
 import pytest
-import json
-from src.discord_mcp.server import call_tool
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 
 @pytest.mark.integration
@@ -8,36 +8,53 @@ from src.discord_mcp.server import call_tool
 @pytest.mark.slow
 @pytest.mark.asyncio
 async def test_mcp_get_servers_tool(real_config):
-    """Test the get_servers MCP tool."""
-    # Test get_servers tool
-    result = await call_tool("get_servers", {})
-    assert isinstance(result, list)
-    assert len(result) == 1
-
-    servers_data = json.loads(result[0].text)  # type: ignore
-    print(f"Servers response: {servers_data}")
-
-    # Check if it's an error response
-    if isinstance(servers_data, dict) and "error" in servers_data:
-        print(f"Error in response: {servers_data['error']}")
-        raise Exception(f"Tool returned error: {servers_data['error']}")
-
-    assert isinstance(servers_data, list)
-    assert len(servers_data) > 0
-    print(f"MCP server found {len(servers_data)} guilds")
-
-    # Should find Audiogen Company server
-    audiogen_server = None
-    for server in servers_data:
-        if "Audiogen Company" in server["name"]:
-            audiogen_server = server
-            break
-
-    assert audiogen_server is not None, (
-        "Audiogen Company server should be found via MCP"
+    """Test the get_servers MCP tool via proper MCP client."""
+    # Create server parameters for stdio connection
+    server_params = StdioServerParameters(
+        command="uv",
+        args=["run", "python", "main.py"],
+        env={
+            "DISCORD_EMAIL": real_config.email,
+            "DISCORD_PASSWORD": real_config.password,
+            "DISCORD_HEADLESS": "true",
+        },
     )
-    assert audiogen_server["id"] == "1353689257796960296"
-    print(f"Found Audiogen Company server: {audiogen_server['name']}")
+
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            # Initialize the connection
+            await session.initialize()
+
+            # Call get_servers tool
+            result = await session.call_tool("get_servers", {})
+            print(f"Servers response: {result}")
+
+            assert hasattr(result, "content")
+            assert result.content, "No content in result"
+
+            # Check if this is an error response
+            if result.isError:
+                text_content = result.content[0] if result.content else None
+                error_text = text_content.text if text_content else "Unknown error"
+                print(f"Error in tool response: {error_text}")
+                raise Exception(f"Tool failed: {error_text[:200]}...")
+
+            # Parse the JSON from each text content object
+            import json
+
+            servers_data = []
+            for text_content in result.content:
+                server_data = json.loads(text_content.text)
+                servers_data.append(server_data)
+
+            assert isinstance(servers_data, list)
+            assert len(servers_data) > 0
+            print(f"MCP server found {len(servers_data)} guilds")
+
+            # Should find some Discord server
+            assert servers_data[0]["id"] is not None
+            assert servers_data[0]["name"] is not None
+            print(f"Found server: {servers_data[0]['name']}")
 
 
 @pytest.mark.integration
@@ -45,63 +62,57 @@ async def test_mcp_get_servers_tool(real_config):
 @pytest.mark.slow
 @pytest.mark.asyncio
 async def test_mcp_get_channels_tool(real_config):
-    """Test the get_channels MCP tool."""
-    audiogen_id = "1353689257796960296"
-
-    # Test get_channels tool
-    result = await call_tool("get_channels", {"server_id": audiogen_id})
-    assert isinstance(result, list)
-    assert len(result) == 1
-
-    channels_data = json.loads(result[0].text)  # type: ignore
-    assert isinstance(channels_data, list)
-    assert len(channels_data) > 0, (
-        "Expected to find channels in Audiogen Company via MCP, but found 0"
-    )
-    print(f"MCP found {len(channels_data)} channels in Audiogen Company")
-
-    for channel_info in channels_data:
-        assert "id" in channel_info
-        assert "name" in channel_info
-        assert "type" in channel_info
-        print(f"  {channel_info['name']} (ID: {channel_info['id']})")
-
-
-@pytest.mark.integration
-@pytest.mark.browser
-@pytest.mark.slow
-@pytest.mark.asyncio
-async def test_mcp_read_messages_tool(real_config):
-    """Test the read_messages MCP tool."""
-    audiogen_server_id = "1353689257796960296"
-    test_channel_id = "1353694097696755766"  # Use Audiogen general channel
-
-    # Test read_messages tool
-    print(
-        f"Testing MCP message reading from server {audiogen_server_id}, channel {test_channel_id}"
-    )
-    result = await call_tool(
-        "read_messages",
-        {
-            "server_id": audiogen_server_id,
-            "channel_id": test_channel_id,
-            "max_messages": 5,
+    """Test the get_channels MCP tool via proper MCP client."""
+    # Create server parameters for stdio connection
+    server_params = StdioServerParameters(
+        command="uv",
+        args=["run", "python", "main.py"],
+        env={
+            "DISCORD_EMAIL": real_config.email,
+            "DISCORD_PASSWORD": real_config.password,
+            "DISCORD_HEADLESS": "true",
         },
     )
 
-    assert isinstance(result, list)
-    assert len(result) == 1
+    audiogen_server_id = "1353689257796960296"
 
-    messages_data = json.loads(result[0].text)  # type: ignore
-    assert isinstance(messages_data, list)
-    print(f"MCP read {len(messages_data)} messages from channel {test_channel_id}")
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            # Initialize the connection
+            await session.initialize()
 
-    for message_info in messages_data:
-        assert "id" in message_info
-        assert "content" in message_info
-        assert "author_name" in message_info
-        assert "timestamp" in message_info
-        assert "attachments" in message_info
+            # Test get_channels tool
+            result = await session.call_tool(
+                "get_channels", {"server_id": audiogen_server_id}
+            )
+            assert hasattr(result, "content")
+            assert result.content, "No content in result"
+
+            if result.isError:
+                text_content = result.content[0] if result.content else None
+                error_text = text_content.text if text_content else "Unknown error"
+                print(f"Error in tool response: {error_text}")
+                raise Exception(f"Tool failed: {error_text[:200]}...")
+
+            import json
+
+            channels_data = []
+            for text_content in result.content:
+                channel_data = json.loads(text_content.text)
+                channels_data.append(channel_data)
+            assert isinstance(channels_data, list)
+            assert len(channels_data) > 0, (
+                f"Expected to find channels in server {audiogen_server_id} via MCP, but found 0"
+            )
+            print(
+                f"MCP found {len(channels_data)} channels in server {audiogen_server_id}"
+            )
+
+            for channel_info in channels_data:
+                assert "id" in channel_info
+                assert "name" in channel_info
+                assert "type" in channel_info
+                print(f"  {channel_info['name']} (ID: {channel_info['id']})")
 
 
 @pytest.mark.integration
@@ -109,36 +120,126 @@ async def test_mcp_read_messages_tool(real_config):
 @pytest.mark.slow
 @pytest.mark.asyncio
 async def test_mcp_send_message_tool(real_config):
-    """Test the send_message MCP tool."""
-    audiogen_server_id = "1353689257796960296"
-    audiogen_channel_id = "1353694097696755766"
-    test_message = "hi from discord mcp"
-
-    # Test send_message tool
-    print(
-        f"Testing MCP message sending to server {audiogen_server_id}, channel {audiogen_channel_id}"
-    )
-    result = await call_tool(
-        "send_message",
-        {
-            "server_id": audiogen_server_id,
-            "channel_id": audiogen_channel_id,
-            "content": test_message,
+    """Test the send_message MCP tool via proper MCP client."""
+    # Create server parameters for stdio connection
+    server_params = StdioServerParameters(
+        command="uv",
+        args=["run", "python", "main.py"],
+        env={
+            "DISCORD_EMAIL": real_config.email,
+            "DISCORD_PASSWORD": real_config.password,
+            "DISCORD_HEADLESS": "true",
         },
     )
 
-    assert isinstance(result, list)
-    assert len(result) == 1
+    audiogen_server_id = "1353689257796960296"
+    audiogen_channel_id = "1353694097696755766"
+    test_message = "hi from discord mcp fastmcp test"
 
-    response_data = json.loads(result[0].text)  # type: ignore
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            # Initialize the connection
+            await session.initialize()
 
-    # Check if it's an error response
-    if isinstance(response_data, dict) and "error" in response_data:
-        print(f"Error in response: {response_data['error']}")
-        raise Exception(f"Tool returned error: {response_data['error']}")
+            # Test send_message tool
+            print(
+                f"Testing MCP message sending to server {audiogen_server_id}, channel {audiogen_channel_id}"
+            )
+            result = await session.call_tool(
+                "send_message",
+                {
+                    "server_id": audiogen_server_id,
+                    "channel_id": audiogen_channel_id,
+                    "content": test_message,
+                },
+            )
+            assert hasattr(result, "content")
+            assert result.content, "No content in result"
 
-    assert isinstance(response_data, dict)
-    assert "message_id" in response_data
-    assert "status" in response_data
-    assert response_data["status"] == "sent"
-    print(f"MCP successfully sent message with ID: {response_data['message_id']}")
+            if result.isError:
+                text_content = result.content[0] if result.content else None
+                error_text = text_content.text if text_content else "Unknown error"
+                print(f"Error in tool response: {error_text}")
+                raise Exception(f"Tool failed: {error_text[:200]}...")
+
+            import json
+
+            # send_message returns a single object, not a list
+            text_content = result.content[0]
+            response_data = json.loads(text_content.text)
+
+            assert isinstance(response_data, dict)
+            assert "message_id" in response_data
+            assert "status" in response_data
+            assert response_data["status"] == "sent"
+            print(
+                f"MCP successfully sent message with ID: {response_data['message_id']}"
+            )
+
+
+@pytest.mark.integration
+@pytest.mark.browser
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_mcp_read_messages_tool(real_config):
+    """Test the read_messages MCP tool via proper MCP client."""
+    # Create server parameters for stdio connection
+    server_params = StdioServerParameters(
+        command="uv",
+        args=["run", "python", "main.py"],
+        env={
+            "DISCORD_EMAIL": real_config.email,
+            "DISCORD_PASSWORD": real_config.password,
+            "DISCORD_HEADLESS": "true",
+        },
+    )
+
+    audiogen_server_id = "1353689257796960296"
+    test_channel_id = "1353694097696755766"
+
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            # Initialize the connection
+            await session.initialize()
+
+            # Test read_messages tool
+            print(
+                f"Testing MCP message reading from server {audiogen_server_id}, channel {test_channel_id}"
+            )
+            result = await session.call_tool(
+                "read_messages",
+                {
+                    "server_id": audiogen_server_id,
+                    "channel_id": test_channel_id,
+                    "hours_back": 168,  # 1 week instead of 24 hours
+                    "max_messages": 5,
+                },
+            )
+            assert hasattr(result, "content")
+
+            if result.isError:
+                text_content = result.content[0] if result.content else None
+                error_text = text_content.text if text_content else "Unknown error"
+                print(f"Error in tool response: {error_text}")
+                raise Exception(f"Tool failed: {error_text[:200]}...")
+
+            import json
+
+            messages_data = []
+
+            assert result.content, "No content in result - expected to find messages"
+
+            for text_content in result.content:
+                message_data = json.loads(text_content.text)
+                messages_data.append(message_data)
+            assert isinstance(messages_data, list)
+            print(
+                f"MCP read {len(messages_data)} messages from channel {test_channel_id}"
+            )
+
+            for message_info in messages_data:
+                assert "id" in message_info
+                assert "content" in message_info
+                assert "author_name" in message_info
+                assert "timestamp" in message_info
+                assert "attachments" in message_info

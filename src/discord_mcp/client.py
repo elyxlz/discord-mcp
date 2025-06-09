@@ -455,21 +455,83 @@ async def get_channel_messages(
     await state.page.wait_for_selector('[data-list-id="chat-messages"]', timeout=10000)
     logger.debug("Chat messages container found")
 
+    # Debug: Check what elements are actually in the chat container
+    all_elements = await state.page.query_selector_all(
+        '[data-list-id="chat-messages"] *[id]'
+    )
+    logger.debug(f"Found {len(all_elements)} elements with IDs in chat container")
+    if all_elements:
+        sample_ids = []
+        for i, elem in enumerate(all_elements[:5]):  # Sample first 5
+            elem_id = await elem.get_attribute("id")
+            sample_ids.append(elem_id)
+        logger.debug(f"Sample IDs: {sample_ids}")
+
+    # Also check for any direct children of the chat container
+    chat_children = await state.page.query_selector_all(
+        '[data-list-id="chat-messages"] > *'
+    )
+    logger.debug(f"Found {len(chat_children)} direct children of chat container")
+
+    # And check all elements in the container regardless of ID
+    all_chat_elements = await state.page.query_selector_all(
+        '[data-list-id="chat-messages"] *'
+    )
+    logger.debug(f"Found {len(all_chat_elements)} total elements in chat container")
+
+    # Check if there are any elements with message-like class names
+    message_like = await state.page.query_selector_all(
+        '[data-list-id="chat-messages"] [class*="message"]'
+    )
+    logger.debug(f"Found {len(message_like)} elements with 'message' in class name")
+
     messages = []
     collected = 0
 
     while collected < limit:
+        # Try different selectors to find messages
         message_elements = await state.page.query_selector_all(
             '[data-list-id="chat-messages"] [id^="chat-messages-"]'
         )
+        if len(message_elements) == 0:
+            # Try alternative selectors that work with current Discord
+            message_elements = await state.page.query_selector_all(
+                '[data-list-id="chat-messages"] li[id]'
+            )
+            if len(message_elements) == 0:
+                # Try even broader selector for message containers
+                message_elements = await state.page.query_selector_all(
+                    '[data-list-id="chat-messages"] [class*="message"][class*="container"]'
+                )
+                if len(message_elements) == 0:
+                    # Try any element that looks like a message
+                    message_elements = await state.page.query_selector_all(
+                        '[data-list-id="chat-messages"] [data-list-item-id]'
+                    )
+            logger.debug(
+                f"Alternative selectors found {len(message_elements)} elements"
+            )
+
+        logger.debug(f"Found {len(message_elements)} message elements on page")
 
         for element in message_elements[-min(50, limit - collected) :]:
             try:
                 message_id = await element.get_attribute("id")
                 if not message_id:
-                    continue
+                    # If no ID, try to get data-list-item-id or create a unique ID
+                    message_id = await element.get_attribute("data-list-item-id")
+                    if not message_id:
+                        # Generate a temporary ID based on element position
+                        message_id = f"message-{collected}"
 
-                message_id = message_id.replace("chat-messages-", "")
+                # Clean up the message ID (remove common prefixes)
+                if message_id.startswith("chat-messages-"):
+                    message_id = message_id.replace("chat-messages-", "")
+                elif message_id.startswith("message-"):
+                    pass  # Keep as is
+                else:
+                    # For other formats, use as is
+                    pass
 
                 content_element = await element.query_selector(
                     '[class*="messageContent"]'
