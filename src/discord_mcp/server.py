@@ -5,24 +5,21 @@ import typing as tp
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 
-from .client import DiscordWebClient
+from .client import create_client_state, get_guilds, get_guild_channels, send_message, reset_client_state, close_client
 from .config import load_config
-from .discovery import (
-    discover_channels_by_keywords,
-    discover_channels_by_pattern,
-    get_announcement_channels,
-    get_feedback_channels,
-)
-from .messages import (
-    read_recent_messages,
-    aggregate_channel_messages,
-    summarize_messages_by_channel,
-)
+from .messages import read_recent_messages
 
 
 server = Server("discord-mcp")
 config = load_config()
-discord_client = DiscordWebClient(config.email, config.password, config.headless)
+client_state = create_client_state(config.email, config.password, config.headless)
+
+
+async def reset_global_client_state():
+    """Reset the global client state for test isolation."""
+    global client_state
+    await close_client(client_state)
+    client_state = reset_client_state(client_state)
 
 
 @server.list_tools()
@@ -30,61 +27,26 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="get_servers",
-            description="List all Discord servers (guilds) the bot has access to",
+            description="List all Discord servers (guilds) you have access to",
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
-            name="discover_channels",
-            description="Find channels by keyword patterns across servers",
+            name="get_channels",
+            description="List all channels in a specific Discord server",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "keywords": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Keywords to search for in channel names",
-                    },
-                    "guild_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional list of guild IDs to limit search",
-                    },
-                },
-                "required": ["keywords"],
-            },
-        ),
-        Tool(
-            name="search_channels",
-            description="Search for channels using regex pattern",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "pattern": {
+                    "server_id": {
                         "type": "string",
-                        "description": "Regex pattern to match channel names",
-                    },
-                    "guild_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional list of guild IDs to limit search",
+                        "description": "Discord server (guild) ID",
                     },
                 },
-                "required": ["pattern"],
+                "required": ["server_id"],
             },
-        ),
-        Tool(
-            name="get_announcement_channels",
-            description="Find channels that likely contain announcements",
-            inputSchema={"type": "object", "properties": {}, "required": []},
-        ),
-        Tool(
-            name="get_feedback_channels",
-            description="Find channels that likely contain feedback or discussions",
-            inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
             name="read_messages",
-            description="Read recent messages from a channel with time filtering",
+            description="Read recent messages from a specific channel",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -100,45 +62,15 @@ async def list_tools() -> list[Tool]:
                     "max_messages": {
                         "type": "integer",
                         "description": "Maximum number of messages to read",
-                        "default": 200,
+                        "default": 100,
                     },
                 },
                 "required": ["channel_id"],
             },
         ),
         Tool(
-            name="read_channel_batch",
-            description="Read messages from multiple channels and aggregate results",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "channel_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of Discord channel IDs",
-                    },
-                    "hours_back": {
-                        "type": "integer",
-                        "description": "How many hours back to read messages",
-                        "default": 24,
-                    },
-                    "max_per_channel": {
-                        "type": "integer",
-                        "description": "Maximum messages per channel",
-                        "default": 100,
-                    },
-                    "summary_only": {
-                        "type": "boolean",
-                        "description": "Return only summary statistics",
-                        "default": False,
-                    },
-                },
-                "required": ["channel_ids"],
-            },
-        ),
-        Tool(
             name="send_message",
-            description="Send a message to a Discord channel",
+            description="Send a message to a specific Discord channel",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -159,91 +91,34 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, tp.Any]) -> list[TextContent]:
+    global client_state
     try:
         if name == "get_servers":
-            guilds = await discord_client.get_guilds()
-            result = [{"id": g.id, "name": g.name, "icon": g.icon} for g in guilds]
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+            client_state, guilds = await get_guilds(client_state)
+            result = [{"id": g.id, "name": g.name} for g in guilds]
+            response = [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-        elif name == "discover_channels":
-            keywords = arguments["keywords"]
-            guild_ids = arguments.get("guild_ids")
-
-            matches = await discover_channels_by_keywords(
-                discord_client, keywords, guild_ids
-            )
+        elif name == "get_channels":
+            server_id = arguments["server_id"]
+            client_state, channels = await get_guild_channels(client_state, server_id)
 
             result = [
                 {
-                    "channel_id": m.channel.id,
-                    "channel_name": m.channel.name,
-                    "guild_id": m.guild.id,
-                    "guild_name": m.guild.name,
-                    "match_reason": m.match_reason,
+                    "id": c.id,
+                    "name": c.name,
+                    "type": c.type,
                 }
-                for m in matches
+                for c in channels
             ]
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
-
-        elif name == "search_channels":
-            pattern = arguments["pattern"]
-            guild_ids = arguments.get("guild_ids")
-
-            matches = await discover_channels_by_pattern(
-                discord_client, pattern, guild_ids
-            )
-
-            result = [
-                {
-                    "channel_id": m.channel.id,
-                    "channel_name": m.channel.name,
-                    "guild_id": m.guild.id,
-                    "guild_name": m.guild.name,
-                    "match_reason": m.match_reason,
-                }
-                for m in matches
-            ]
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
-
-        elif name == "get_announcement_channels":
-            matches = await get_announcement_channels(discord_client)
-
-            result = [
-                {
-                    "channel_id": m.channel.id,
-                    "channel_name": m.channel.name,
-                    "guild_id": m.guild.id,
-                    "guild_name": m.guild.name,
-                    "match_reason": m.match_reason,
-                }
-                for m in matches
-            ]
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
-
-        elif name == "get_feedback_channels":
-            matches = await get_feedback_channels(discord_client)
-
-            result = [
-                {
-                    "channel_id": m.channel.id,
-                    "channel_name": m.channel.name,
-                    "guild_id": m.guild.id,
-                    "guild_name": m.guild.name,
-                    "match_reason": m.match_reason,
-                }
-                for m in matches
-            ]
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+            response = [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         elif name == "read_messages":
             channel_id = arguments["channel_id"]
             hours_back = arguments.get("hours_back", config.default_hours_back)
-            max_messages = arguments.get(
-                "max_messages", config.max_messages_per_channel
-            )
+            max_messages = arguments.get("max_messages", 100)
 
-            messages = await read_recent_messages(
-                discord_client, channel_id, hours_back, max_messages
+            client_state, messages = await read_recent_messages(
+                client_state, channel_id, hours_back, max_messages
             )
 
             result = [
@@ -251,73 +126,37 @@ async def call_tool(name: str, arguments: dict[str, tp.Any]) -> list[TextContent
                     "id": m.id,
                     "content": m.content,
                     "author_name": m.author_name,
-                    "author_id": m.author_id,
                     "timestamp": m.timestamp.isoformat(),
                     "attachments": m.attachments,
                 }
                 for m in messages
             ]
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
-
-        elif name == "read_channel_batch":
-            channel_ids = arguments["channel_ids"]
-            hours_back = arguments.get("hours_back", config.default_hours_back)
-            max_per_channel = arguments.get("max_per_channel", 100)
-            summary_only = arguments.get("summary_only", False)
-
-            channels = []
-            for channel_id in channel_ids:
-                try:
-                    guilds = await discord_client.get_guilds()
-                    for guild in guilds:
-                        guild_channels = await discord_client.get_guild_channels(
-                            guild.id
-                        )
-                        for channel in guild_channels:
-                            if channel.id == channel_id:
-                                channels.append(channel)
-                                break
-                except Exception:
-                    continue
-
-            messages_by_channel = await aggregate_channel_messages(
-                discord_client, channels, hours_back, max_per_channel
-            )
-
-            if summary_only:
-                result = summarize_messages_by_channel(messages_by_channel, channels)
-            else:
-                result = {}
-                for channel_id, messages in messages_by_channel.items():
-                    result[channel_id] = [
-                        {
-                            "id": m.id,
-                            "content": m.content,
-                            "author_name": m.author_name,
-                            "timestamp": m.timestamp.isoformat(),
-                        }
-                        for m in messages
-                    ]
-
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+            response = [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         elif name == "send_message":
             channel_id = arguments["channel_id"]
             content = arguments["content"]
 
-            message_id = await discord_client.send_message(channel_id, content)
-
-            result = {
-                "success": True,
-                "message_id": message_id,
-                "channel_id": channel_id,
-            }
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+            client_state, message_id = await send_message(
+                client_state, channel_id, content
+            )
+            result = {"message_id": message_id, "status": "sent"}
+            response = [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         else:
-            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+            response = [TextContent(type="text", text=f"Unknown tool: {name}")]
+
+        # Reset client state after every tool call to ensure isolation
+        await close_client(client_state)
+        client_state = reset_client_state(client_state)
+        
+        return response
 
     except Exception as e:
+        # Reset client state even on error to ensure isolation
+        await close_client(client_state)
+        client_state = reset_client_state(client_state)
+        
         error_result = {"error": str(e), "tool": name, "arguments": arguments}
         return [TextContent(type="text", text=json.dumps(error_result, indent=2))]
 

@@ -101,43 +101,33 @@ The server communicates via stdin/stdout following the MCP protocol. Start it an
 
 ## Available Tools
 
-### Server Management
-- **`get_servers`** - List all accessible Discord servers
-
-### Channel Discovery
-- **`discover_channels`** - Find channels by keyword matching
-- **`search_channels`** - Find channels using regex patterns
-- **`get_announcement_channels`** - Auto-discover announcement channels
-- **`get_feedback_channels`** - Auto-discover feedback/discussion channels
-
-### Message Operations
-- **`read_messages`** - Read recent messages from a channel
-- **`read_channel_batch`** - Read messages from multiple channels
-- **`send_message`** - Send messages to Discord channels
+- **`get_servers`** - List all Discord servers you have access to
+- **`get_channels`** - List all channels in a specific Discord server  
+- **`read_messages`** - Read recent messages from a specific channel
 
 ## Usage Examples
 
-### Discover Announcement Channels
+### List Your Discord Servers
 
 ```json
 {
-  "tool": "get_announcement_channels",
+  "tool": "get_servers",
   "arguments": {}
 }
 ```
 
-### Monitor Specific Keywords
+### Get All Channels in a Server
 
 ```json
 {
-  "tool": "discover_channels",
+  "tool": "get_channels",
   "arguments": {
-    "keywords": ["announcement", "news", "updates", "release"]
+    "server_id": "1234567890123456789"
   }
 }
 ```
 
-### Read Recent Messages
+### Read Recent Messages from a Channel
 
 ```json
 {
@@ -146,31 +136,6 @@ The server communicates via stdin/stdout following the MCP protocol. Start it an
     "channel_id": "1234567890123456789",
     "hours_back": 24,
     "max_messages": 100
-  }
-}
-```
-
-### Batch Read Multiple Channels
-
-```json
-{
-  "tool": "read_channel_batch",
-  "arguments": {
-    "channel_ids": ["1234567890123456789", "9876543210987654321"],
-    "hours_back": 24,
-    "summary_only": true
-  }
-}
-```
-
-### Send Community Summary
-
-```json
-{
-  "tool": "send_message",
-  "arguments": {
-    "channel_id": "your_channel_id",
-    "content": "## Community Update\n\nLatest announcements and discussions from monitored channels..."
   }
 }
 ```
