@@ -4,6 +4,7 @@ import pathlib as pl
 from datetime import datetime, timezone
 import dataclasses as dc
 from playwright.async_api import async_playwright, Browser, Page, Playwright
+from .logger import logger
 
 
 @dc.dataclass(frozen=True)
@@ -358,7 +359,7 @@ async def get_guild_channels(
     current_url = state.page.url
     if f"/channels/{guild_id}" not in current_url:
         raise RuntimeError(f"Could not navigate to guild {guild_id}")
-    # Extract channels from page
+    logger.debug("Extracting channel data using JavaScript")
     channels_data = await state.page.evaluate(f"""
         () => {{
             const channels = [];
@@ -412,6 +413,7 @@ async def get_guild_channels(
         }}
     """)
 
+    logger.debug(f"JavaScript extraction returned {len(channels_data)} channels")
     channels = [
         DiscordChannel(
             id=channel_data["id"],
@@ -421,6 +423,8 @@ async def get_guild_channels(
         )
         for channel_data in channels_data
     ]
+    logger.debug(f"Created {len(channels)} DiscordChannel objects")
+    logger.debug(f"get_guild_channels completed successfully for guild {guild_id}")
 
     return state, channels
 
