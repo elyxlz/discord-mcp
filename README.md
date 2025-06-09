@@ -6,7 +6,7 @@ A Model Context Protocol (MCP) server that lets LLMs read messages, discover cha
 
 - List Discord servers and channels you have access to
 - Read recent messages with time filtering (newest first)
-- Send messages to Discord channels
+- Send messages to Discord channels (automatically splits long messages)
 - Web scraping approach - works with any Discord server you can access as a user
 - No bot permissions or API tokens required
 
@@ -26,11 +26,14 @@ claude
 # List your Discord servers
 > use get_servers to show me all my Discord servers
 
-# Read recent messages
+# Read recent messages (max_messages is required)
 > read the last 20 messages from channel ID 123 in server ID 456
 
-# Send a message
+# Send a message (long messages automatically split)
 > send "Hello!" to channel 123 in server 456
+
+# Send a long message (will be split automatically)
+> send a very long message with multiple paragraphs to channel 123 in server 456
 
 # Monitor communities
 > summarize discussions from the last 24 hours across my Discord servers
@@ -40,8 +43,8 @@ claude
 
 - **`get_servers`** - List all Discord servers you have access to
 - **`get_channels(server_id)`** - List channels in a specific server
-- **`read_messages(server_id, channel_id, hours_back?, max_messages?)`** - Read recent messages (newest first)
-- **`send_message(server_id, channel_id, content)`** - Send messages to channels
+- **`read_messages(server_id, channel_id, max_messages, hours_back?)`** - Read recent messages (newest first, max_messages required)
+- **`send_message(server_id, channel_id, content)`** - Send messages to channels (automatically splits long messages)
 
 ## Manual Setup
 
@@ -109,15 +112,16 @@ uv run pytest -v tests/
 
 - Use app passwords if 2FA is enabled
 - Consider using a dedicated Discord account for automation
-- Server includes delays to avoid rate limiting
+- Server includes delays to avoid rate limiting (0.5s between split messages)
 - Always use `DISCORD_HEADLESS=true` in production
 
 ## Troubleshooting
 
 - **Login issues**: Verify credentials, use app password for 2FA
 - **Browser errors**: Run `uv run playwright install --force`
-- **Rate limits**: Reduce `max_messages`, monitor for Discord warnings
+- **Rate limits**: Reduce `max_messages`, monitor for Discord warnings (server auto-splits long messages with delays)
 - **Cookie issues**: Delete `~/.discord_mcp_cookies.json` if needed
+- **Message splitting**: Long messages (>2000 chars) automatically split into multiple messages with 0.5s delays
 
 ## Legal Notice
 

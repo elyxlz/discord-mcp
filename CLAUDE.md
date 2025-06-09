@@ -45,8 +45,8 @@ This implementation uses **Playwright web scraping** instead of Discord's API be
 ## MCP Tools Implemented
 - **`get_servers`** - List all Discord servers you have access to
 - **`get_channels(server_id)`** - List all channels in a specific Discord server
-- **`read_messages(server_id, channel_id, hours_back?, max_messages?)`** - Read recent messages in chronological order (newest first)
-- **`send_message(server_id, channel_id, content)`** - Send messages to specific Discord channels
+- **`read_messages(server_id, channel_id, max_messages, hours_back?)`** - Read recent messages in chronological order (newest first)
+- **`send_message(server_id, channel_id, content)`** - Send messages to specific Discord channels (automatically splits long messages)
 
 ## Dependencies
 - **mcp** - Official MCP library via FastMCP

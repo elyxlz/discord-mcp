@@ -172,11 +172,13 @@ async def test_mcp_send_message_tool(real_config):
             response_data = json.loads(text_content.text)
 
             assert isinstance(response_data, dict)
-            assert "message_id" in response_data
+            assert "message_ids" in response_data
             assert "status" in response_data
+            assert "chunks" in response_data
             assert response_data["status"] == "sent"
+            assert len(response_data["message_ids"]) >= 1
             print(
-                f"MCP successfully sent message with ID: {response_data['message_id']}"
+                f"MCP successfully sent {response_data['chunks']} message(s) with IDs: {response_data['message_ids']}"
             )
 
 
