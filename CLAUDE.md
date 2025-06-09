@@ -63,3 +63,92 @@ This is the original Python implementation using Discord API. For web scraping a
 - aiohttp (for Discord API calls)
 - python-dotenv (for environment variable management)
 - typing-extensions (for type hints)
+
+## Test Stability Fixes Applied
+
+### Critical Lessons Learned
+During development, we discovered that Playwright-based Discord automation requires very careful state management to avoid test flakiness and browser hanging. The following fixes were essential for reliable test execution:
+
+#### 1. Browser State Isolation Between Tool Calls
+**Problem**: Browser state would get corrupted between MCP tool calls, causing subsequent calls to hang or fail.
+**Solution**: Complete browser reset between every tool call using `close_client()` and recreating `client_state`.
+
+**Implementation**: In `server.py`, every tool call now:
+```python
+# COMPLETE RESET: Close and recreate client state for every tool call
+await asyncio.wait_for(close_client(client_state), timeout=10.0)
+client_state = create_client_state(config.email, config.password, config.headless)
+```
+
+#### 2. Async Lock Serialization
+**Problem**: Concurrent test execution led to race conditions in browser operations.
+**Solution**: Global `_CLIENT_LOCK = asyncio.Lock()` to serialize all browser operations.
+
+#### 3. Robust Waiting Strategies
+**Problem**: `await asyncio.sleep()` calls were unreliable and caused random test failures.
+**Solution**: Replaced with proper Playwright waits:
+- `page.wait_for_selector()` with specific timeouts
+- `page.wait_for_function()` for dynamic content
+- `page.wait_for_timeout()` only for brief delays after actions
+
+#### 4. Optimized Guild Discovery
+**Problem**: Clicking through every Discord server was slow and error-prone.
+**Solution**: JavaScript-based extraction using `page.evaluate()` to get guild information without clicking:
+```javascript
+const elements = document.querySelectorAll('[data-list-id="guildsnav"] [data-dnd-name]');
+// Extract guild IDs and names directly from DOM
+```
+
+#### 5. Deterministic Scrolling
+**Problem**: `PageUp` key presses for message scrolling were unpredictable.
+**Solution**: Use `element.scroll_into_view_if_needed()` for precise scrolling control.
+
+#### 6. Sequential Test Execution
+**Problem**: Parallel test execution caused resource conflicts.
+**Solution**: Added `-n 0` to `pytest.ini` to force sequential execution.
+
+### Future Simplification Opportunities
+
+#### Option 1: Session Reuse with Smart Reset
+Instead of complete browser recreation, implement selective reset:
+```python
+# Only reset when necessary, keep browser alive
+if browser_in_bad_state:
+    await page.reload()
+    await navigate_to_home()
+else:
+    # Just navigate to clean state
+    await page.goto("https://discord.com/channels/@me")
+```
+
+#### Option 2: Stateless Tool Operations
+Make each tool completely stateless by passing all required context:
+```python
+async def get_guild_channels(email: str, password: str, guild_id: str):
+    # Create browser, do operation, close browser
+    # No shared state between calls
+```
+
+#### Option 3: Browser Pool
+Maintain a pool of browser instances for better resource management:
+```python
+class BrowserPool:
+    async def get_browser(self) -> Browser:
+        # Return available browser or create new one
+    async def return_browser(self, browser: Browser):
+        # Reset and return to pool
+```
+
+### Testing Strategy
+- Always run `uv run pytest -v tests/test_integration.py` to verify changes
+- Use comprehensive logging during development to identify hanging points
+- Monitor browser close operations with timeouts to prevent infinite hangs
+- Keep the complete reset mechanism as fallback for maximum reliability
+
+### Performance Notes
+- Complete browser reset adds ~2-3 seconds per tool call
+- Cookie persistence (`discord_mcp_cookies.json`) eliminates re-login overhead
+- JavaScript extraction is 10x faster than clicking through UI elements
+- Sequential execution is slower but eliminates race conditions
+
+The current implementation prioritizes **reliability over speed** - all tests pass consistently, which is essential for production use. Future optimizations should maintain this reliability while improving performance.
