@@ -1,32 +1,5 @@
-import typing as tp
 from datetime import datetime, timezone, timedelta
-from .client import ClientState, DiscordMessage, DiscordChannel, get_channel_messages
-
-
-class MessageBatch(tp.NamedTuple):
-    messages: list[DiscordMessage]
-    has_more: bool
-    oldest_message_id: str | None
-
-
-def _filter_messages_by_time(
-    messages: list[DiscordMessage],
-    after: datetime | None = None,
-    before: datetime | None = None,
-) -> list[DiscordMessage]:
-    filtered = messages
-
-    if after:
-        filtered = [m for m in filtered if m.timestamp > after]
-
-    if before:
-        filtered = [m for m in filtered if m.timestamp < before]
-
-    return filtered
-
-
-def _get_last_24_hours() -> datetime:
-    return datetime.now(timezone.utc) - timedelta(hours=24)
+from .client import ClientState, DiscordMessage, get_channel_messages
 
 
 async def read_recent_messages(
@@ -49,7 +22,7 @@ async def read_recent_messages(
         if not messages:
             break
 
-        recent_messages = _filter_messages_by_time(messages, after=cutoff_time)
+        recent_messages = [m for m in messages if m.timestamp > cutoff_time]
         all_messages.extend(recent_messages)
 
         oldest_message = messages[-1]
@@ -59,70 +32,3 @@ async def read_recent_messages(
         last_message_id = oldest_message.id
 
     return state, sorted(all_messages, key=lambda m: m.timestamp, reverse=True)
-
-
-async def read_messages_paginated(
-    state: ClientState,
-    channel_id: str,
-    limit: int = 100,
-    before_message_id: str | None = None,
-    after_time: datetime | None = None,
-) -> tuple[ClientState, MessageBatch]:
-    state, messages = await get_channel_messages(
-        state, channel_id=channel_id, limit=min(limit, 100), before=before_message_id
-    )
-
-    if after_time:
-        messages = _filter_messages_by_time(messages, after=after_time)
-
-    has_more = len(messages) == min(limit, 100)
-    oldest_id = messages[-1].id if messages else None
-
-    return state, MessageBatch(
-        messages=messages, has_more=has_more, oldest_message_id=oldest_id
-    )
-
-
-async def aggregate_channel_messages(
-    state: ClientState,
-    channels: list[DiscordChannel],
-    hours_back: int = 24,
-    max_per_channel: int = 200,
-) -> tuple[ClientState, dict[str, list[DiscordMessage]]]:
-    results = {}
-
-    for channel in channels:
-        try:
-            state, messages = await read_recent_messages(
-                state,
-                channel_id=channel.id,
-                hours_back=hours_back,
-                max_messages=max_per_channel,
-            )
-            results[channel.id] = messages
-        except Exception:
-            results[channel.id] = []
-
-    return state, results
-
-
-def summarize_messages_by_channel(
-    messages_by_channel: dict[str, list[DiscordMessage]], channels: list[DiscordChannel]
-) -> dict[str, dict[str, tp.Any]]:
-    channel_map = {c.id: c for c in channels}
-    summary = {}
-
-    for channel_id, messages in messages_by_channel.items():
-        channel = channel_map.get(channel_id)
-        if not channel:
-            continue
-
-        summary[channel_id] = {
-            "channel_name": channel.name,
-            "message_count": len(messages),
-            "latest_message": messages[0].timestamp.isoformat() if messages else None,
-            "oldest_message": messages[-1].timestamp.isoformat() if messages else None,
-            "unique_authors": len(set(m.author_id for m in messages)),
-        }
-
-    return summary

@@ -10,7 +10,6 @@ from .client import (
     get_guilds,
     get_guild_channels,
     send_message,
-    reset_client_state,
     close_client,
 )
 from .config import load_config
@@ -24,10 +23,9 @@ _CLIENT_LOCK = asyncio.Lock()
 
 
 async def reset_global_client_state():
-    """Reset the global client state for test isolation."""
     global client_state
     await close_client(client_state)
-    client_state = reset_client_state(client_state)
+    client_state = create_client_state(config.email, config.password, config.headless)
 
 
 @server.list_tools()
@@ -103,40 +101,25 @@ async def call_tool(name: str, arguments: dict[str, tp.Any]) -> list[TextContent
 
     async with _CLIENT_LOCK:
         try:
-            print(f"🔧 Starting tool call: {name} with args: {arguments}")
-
-            # COMPLETE RESET: Close and recreate client state for every tool call
-            print("🔄 Completely resetting client state...")
             try:
-                print("🔄 Closing browser...")
                 await asyncio.wait_for(close_client(client_state), timeout=10.0)
-                print("✅ Browser closed")
-            except asyncio.TimeoutError:
-                print("⚠️ Browser close timed out, forcing reset")
-            except Exception as e:
-                print(f"⚠️ Error closing browser: {e}")
+            except Exception:
+                pass
 
-            print("🔄 Creating fresh client state...")
             client_state = create_client_state(
                 config.email, config.password, config.headless
             )
-            print("✅ Fresh client state created")
 
             if name == "get_servers":
-                print("📋 Executing get_servers tool...")
                 client_state, guilds = await get_guilds(client_state)
                 result = [{"id": g.id, "name": g.name} for g in guilds]
                 response = [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             elif name == "get_channels":
-                print("📁 Executing get_channels tool...")
                 server_id = arguments["server_id"]
-                print(f"📁 Getting channels for server ID: {server_id}")
                 client_state, channels = await get_guild_channels(
                     client_state, server_id
                 )
-                print(f"📁 Found {len(channels)} channels")
-
                 result = [
                     {
                         "id": c.id,
@@ -148,19 +131,13 @@ async def call_tool(name: str, arguments: dict[str, tp.Any]) -> list[TextContent
                 response = [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             elif name == "read_messages":
-                print("💬 Executing read_messages tool...")
                 channel_id = arguments["channel_id"]
                 hours_back = arguments.get("hours_back", config.default_hours_back)
                 max_messages = arguments.get("max_messages", 100)
-                print(
-                    f"💬 Reading messages from channel {channel_id}, {hours_back}h back, max {max_messages}"
-                )
 
                 client_state, messages = await read_recent_messages(
                     client_state, channel_id, hours_back, max_messages
                 )
-                print(f"💬 Found {len(messages)} messages")
-
                 result = [
                     {
                         "id": m.id,
@@ -176,7 +153,6 @@ async def call_tool(name: str, arguments: dict[str, tp.Any]) -> list[TextContent
             elif name == "send_message":
                 channel_id = arguments["channel_id"]
                 content = arguments["content"]
-
                 client_state, message_id = await send_message(
                     client_state, channel_id, content
                 )
@@ -184,17 +160,10 @@ async def call_tool(name: str, arguments: dict[str, tp.Any]) -> list[TextContent
                 response = [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             else:
-                print(f"❌ Unknown tool: {name}")
                 response = [TextContent(type="text", text=f"Unknown tool: {name}")]
 
-            print(f"✅ Tool {name} completed successfully")
             return response
         except Exception as e:
-            print(f"❌ Tool {name} failed with error: {e}")
-            import traceback
-
-            traceback.print_exc()
-
             error_result = {"error": str(e), "tool": name, "arguments": arguments}
             return [TextContent(type="text", text=json.dumps(error_result, indent=2))]
 

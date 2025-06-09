@@ -69,7 +69,6 @@ async def _ensure_browser(state: ClientState) -> ClientState:
     ctx_kwargs = {}
     if state.cookies_file.exists():
         ctx_kwargs["storage_state"] = str(state.cookies_file)
-        print(f"▶️  Loading persisted Discord storage from {state.cookies_file}")
 
     context = await browser.new_context(**ctx_kwargs)
     page = await context.new_page()
@@ -87,7 +86,6 @@ async def _save_storage_state(state: ClientState) -> None:
         return
 
     await state.page.context.storage_state(path=str(state.cookies_file))
-    print(f"💾  Discord storage state saved to {state.cookies_file}")
 
 
 async def _check_logged_in(state: ClientState) -> bool:
@@ -141,12 +139,8 @@ async def _login(state: ClientState) -> ClientState:
     if not state.page:
         raise RuntimeError("Browser page not initialized")
 
-    print("Checking if already logged in with cookies...")
     if await _check_logged_in(state):
-        print("Already logged in! Using existing session.")
         return dc.replace(state, logged_in=True)
-    else:
-        print("Not logged in, proceeding with fresh login...")
 
     await state.page.goto("https://discord.com/login")
     await asyncio.sleep(2)
@@ -166,9 +160,6 @@ async def _login(state: ClientState) -> ClientState:
 
         email_check_count = await state.page.locator('text="Check your email"').count()
         if "/verify" in current_url or email_check_count > 0:
-            print(
-                "Verification required - please check email and complete verification"
-            )
             await state.page.wait_for_function(
                 "() => window.location.href.includes('/channels/')", timeout=120000
             )
@@ -192,37 +183,18 @@ async def _login(state: ClientState) -> ClientState:
         raise RuntimeError(f"Failed to login to Discord: {e}")
 
 
-async def clear_cookies(state: ClientState) -> ClientState:
-    if state.page:
-        await state.page.evaluate("localStorage.clear()")
-    if state.cookies_file.exists():
-        state.cookies_file.unlink()
-    return dc.replace(state, logged_in=False)
-
-
 async def close_client(state: ClientState) -> None:
-    print("🔄 close_client: Starting cleanup...")
     try:
         if state.browser:
-            print("🔄 close_client: Closing browser...")
             await state.browser.close()
-            print("✅ close_client: Browser closed")
-    except Exception as e:
-        print(f"⚠️ close_client: Error closing browser: {e}")
+    except Exception:
+        pass
 
     try:
         if state.playwright:
-            print("🔄 close_client: Stopping playwright...")
             await state.playwright.stop()
-            print("✅ close_client: Playwright stopped")
-    except Exception as e:
-        print(f"⚠️ close_client: Error stopping playwright: {e}")
-
-    print("✅ close_client: Cleanup complete")
-
-
-def reset_client_state(state: ClientState) -> ClientState:
-    return dc.replace(state, playwright=None, browser=None, page=None, logged_in=False)
+    except Exception:
+        pass
 
 
 async def get_guilds(state: ClientState) -> tuple[ClientState, list[DiscordGuild]]:
@@ -244,7 +216,6 @@ async def get_guilds(state: ClientState) -> tuple[ClientState, list[DiscordGuild
         # Give extra time for guild names to load
         await state.page.wait_for_timeout(3000)
 
-        # Wait for at least one guild element to have text or aria-label
         await state.page.wait_for_function(
             """
             () => {
@@ -256,9 +227,8 @@ async def get_guilds(state: ClientState) -> tuple[ClientState, list[DiscordGuild
         """,
             timeout=10000,
         )
-    except Exception as e:
-        print(f"Warning: Could not find guild navigation elements with content: {e}")
-        # Continue anyway, we'll try different selectors
+    except Exception:
+        pass
 
     # Use JavaScript to extract guild information directly without clicking each one
     guilds_data = await state.page.evaluate("""
@@ -374,29 +344,20 @@ async def get_guilds(state: ClientState) -> tuple[ClientState, list[DiscordGuild
 async def get_guild_channels(
     state: ClientState, guild_id: str
 ) -> tuple[ClientState, list[DiscordChannel]]:
-    print(f"📁 get_guild_channels: Starting for guild {guild_id}")
     state = await _login(state)
     if not state.page:
         raise RuntimeError("Browser page not initialized")
 
-    print(f"📁 get_guild_channels: Navigating to guild {guild_id}")
-    # Navigate directly to guild
     await state.page.goto(
         f"https://discord.com/channels/{guild_id}", wait_until="domcontentloaded"
     )
-    print("📁 get_guild_channels: Page loaded, waiting for channel links")
     await state.page.wait_for_selector(
         f'a[href*="/channels/{guild_id}/"]', timeout=15000
     )
-    print("📁 get_guild_channels: Channel links found")
 
-    # Verify we're in the correct guild
     current_url = state.page.url
-    print(f"📁 get_guild_channels: Current URL: {current_url}")
     if f"/channels/{guild_id}" not in current_url:
         raise RuntimeError(f"Could not navigate to guild {guild_id}")
-
-    print("📁 get_guild_channels: Extracting channels from page")
     # Extract channels from page
     channels_data = await state.page.evaluate(f"""
         () => {{
@@ -450,9 +411,6 @@ async def get_guild_channels(
             return channels;
         }}
     """)
-    print(
-        f"📁 get_guild_channels: JavaScript extraction returned {len(channels_data)} channels"
-    )
 
     channels = [
         DiscordChannel(
@@ -463,7 +421,6 @@ async def get_guild_channels(
         )
         for channel_data in channels_data
     ]
-    print(f"📁 get_guild_channels: Created {len(channels)} DiscordChannel objects")
 
     return state, channels
 
@@ -573,9 +530,12 @@ async def get_channel_messages(
 async def _find_guild_for_channel(state: ClientState, channel_id: str) -> str | None:
     state, guilds = await get_guilds(state)
     for guild in guilds:
-        state, channels = await get_guild_channels(state, guild.id)
-        if any(c.id == channel_id for c in channels):
-            return guild.id
+        try:
+            state, channels = await get_guild_channels(state, guild.id)
+            if any(c.id == channel_id for c in channels):
+                return guild.id
+        except Exception:
+            continue
     return None
 
 
