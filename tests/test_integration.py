@@ -211,8 +211,8 @@ async def test_mcp_read_messages_tool(real_config):
                 {
                     "server_id": audiogen_server_id,
                     "channel_id": test_channel_id,
-                    "hours_back": 168,  # 1 week instead of 24 hours
-                    "max_messages": 5,
+                    "hours_back": 8760,  # 1 year to handle Discord timestamp quirks
+                    "max_messages": 20,  # Test with 20 messages to show chronological order
                 },
             )
             assert hasattr(result, "content")
@@ -233,9 +233,20 @@ async def test_mcp_read_messages_tool(real_config):
                 message_data = json.loads(text_content.text)
                 messages_data.append(message_data)
             assert isinstance(messages_data, list)
+
             print(
-                f"MCP read {len(messages_data)} messages from channel {test_channel_id}"
+                f"\n=== MCP read {len(messages_data)} messages from channel {test_channel_id} ==="
             )
+            for i, msg in enumerate(messages_data, 1):
+                print(f"\nMessage {i}:")
+                print(f"  ID: {msg.get('id', 'Unknown')}")
+                print(f"  Author: {msg.get('author_name', 'Unknown')}")
+                print(f"  Timestamp: {msg.get('timestamp', 'Unknown')}")
+                print(
+                    f"  Content: {msg.get('content', '')[:100]}{'...' if len(msg.get('content', '')) > 100 else ''}"
+                )
+                print(f"  Attachments: {len(msg.get('attachments', []))} files")
+            print("=" * 50)
 
             for message_info in messages_data:
                 assert "id" in message_info

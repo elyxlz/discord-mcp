@@ -397,29 +397,30 @@ async def _extract_message_data(
 ) -> DiscordMessage | None:
     try:
         message_id = (
-            await element.get_attribute("id")
-            or await element.get_attribute("data-list-item-id")
-            or f"message-{collected}"
-        )
+            await element.get_attribute("id") or f"message-{collected}"
+        ).replace("chat-messages-", "")
 
-        if message_id.startswith("chat-messages-"):
-            message_id = message_id.replace("chat-messages-", "")
+        content = ""
+        for selector in [
+            '[class*="messageContent"]',
+            '[class*="markup"]',
+            ".messageContent",
+        ]:
+            content_elem = await element.query_selector(selector)
+            if content_elem and (text := await content_elem.text_content()):
+                content = text.strip()
+                break
 
-        content_element = await element.query_selector('[class*="messageContent"]')
-        content = (
-            await content_element.text_content() if content_element else ""
-        ).strip()
+        author_name = "Unknown"
+        for selector in ['[class*="username"]', '[class*="authorName"]', ".username"]:
+            author_elem = await element.query_selector(selector)
+            if author_elem and (name := await author_elem.text_content()):
+                author_name = name.strip()
+                break
 
-        author_element = await element.query_selector('[class*="username"]')
-        author_name = (
-            await author_element.text_content() if author_element else "Unknown"
-        ).strip()
-
-        timestamp_element = await element.query_selector("time")
+        timestamp_elem = await element.query_selector("time")
         timestamp_str = (
-            await timestamp_element.get_attribute("datetime")
-            if timestamp_element
-            else None
+            await timestamp_elem.get_attribute("datetime") if timestamp_elem else None
         )
         timestamp = (
             datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
@@ -427,14 +428,14 @@ async def _extract_message_data(
             else datetime.now(timezone.utc)
         )
 
-        attachment_elements = await element.query_selector_all(
-            'a[href*="cdn.discordapp.com"]'
-        )
         attachments = [
             href
-            for att in attachment_elements
+            for att in await element.query_selector_all('a[href*="cdn.discordapp.com"]')
             if (href := await att.get_attribute("href"))
         ]
+
+        if not content and not attachments:
+            return None
 
         return DiscordMessage(
             id=message_id,
@@ -465,43 +466,51 @@ async def get_channel_messages(
         f"https://discord.com/channels/{server_id}/{channel_id}",
         wait_until="domcontentloaded",
     )
-    await state.page.wait_for_selector('[data-list-id="chat-messages"]', timeout=10000)
+    await state.page.wait_for_selector('[data-list-id="chat-messages"]', timeout=15000)
+
+    # Scroll to bottom for newest messages
+    await state.page.evaluate("""
+        const chat = document.querySelector('[data-list-id="chat-messages"]');
+        if (chat) chat.scrollTo(0, chat.scrollHeight);
+        window.scrollTo(0, document.body.scrollHeight);
+    """)
+    await state.page.wait_for_timeout(2000)
 
     messages = []
-    collected = 0
+    seen_ids = set()
 
-    selectors = [
-        '[data-list-id="chat-messages"] [id^="chat-messages-"]',
-        '[data-list-id="chat-messages"] li[id]',
-        '[data-list-id="chat-messages"] [class*="message"][class*="container"]',
-        '[data-list-id="chat-messages"] [data-list-item-id]',
-    ]
+    for attempt in range(10):
+        elements = await state.page.query_selector_all(
+            '[data-list-id="chat-messages"] [id^="chat-messages-"]'
+        )
+        if not elements:
+            await state.page.keyboard.press("PageUp")
+            await state.page.wait_for_timeout(1000)
+            continue
 
-    while collected < limit:
-        message_elements = []
-        for selector in selectors:
-            message_elements = await state.page.query_selector_all(selector)
-            if message_elements:
+        for element in reversed(elements):
+            if len(messages) >= limit:
                 break
+            try:
+                message = await _extract_message_data(
+                    element, channel_id, len(seen_ids)
+                )
+                if message and message.id not in seen_ids:
+                    if before and message.id >= before:
+                        continue
+                    if after and message.id <= after:
+                        continue
+                    seen_ids.add(message.id)
+                    messages.append(message)
+            except Exception:
+                continue
 
-        if not message_elements:
+        if len(messages) >= limit or not elements:
             break
+        await state.page.keyboard.press("PageUp")
+        await state.page.wait_for_timeout(1000)
 
-        for element in message_elements[-min(50, limit - collected) :]:
-            message = await _extract_message_data(element, channel_id, collected)
-            if message:
-                messages.append(message)
-                collected += 1
-                if collected >= limit:
-                    break
-
-        if collected < limit and message_elements:
-            await message_elements[0].scroll_into_view_if_needed()
-            await state.page.wait_for_timeout(500)
-        else:
-            break
-
-    return state, messages[:limit]
+    return state, sorted(messages, key=lambda m: m.timestamp, reverse=True)[:limit]
 
 
 async def send_message(

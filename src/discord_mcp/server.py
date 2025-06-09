@@ -77,8 +77,8 @@ async def read_messages(
     server_id: str, channel_id: str, hours_back: int = 24, max_messages: int = 100
 ) -> list[dict[str, tp.Any]]:
     """Read recent messages from a specific channel"""
-    if not (1 <= hours_back <= 168):
-        raise ValueError("hours_back must be between 1 and 168")
+    if not (1 <= hours_back <= 8760):
+        raise ValueError("hours_back must be between 1 and 8760 (1 year)")
     if not (1 <= max_messages <= 1000):
         raise ValueError("max_messages must be between 1 and 1000")
 

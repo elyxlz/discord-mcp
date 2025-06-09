@@ -152,3 +152,34 @@ class BrowserPool:
 - Sequential execution is slower but eliminates race conditions
 
 The current implementation prioritizes **reliability over speed** - all tests pass consistently, which is essential for production use. Future optimizations should maintain this reliability while improving performance.
+
+## Critical Bug Discovery: Message Extraction Order Issue
+
+**Date**: June 9, 2025
+**Issue**: Discord message extraction has counterintuitive behavior where requesting MORE messages reveals NEWER messages instead of older ones.
+
+### The Problem
+When using `max_messages` parameter:
+- `max_messages: 20` → Shows messages from May 18, 2025 as "newest"
+- `max_messages: 100` → Reveals actual newest messages from June 9, 2025
+
+This is **backwards** from expected behavior where more messages should go further back in history, not forward to newer content.
+
+### Root Cause Investigation Needed
+This suggests a fundamental issue in the message extraction logic:
+1. **Scrolling Logic**: The initial scroll-to-bottom might not be reaching the actual newest messages
+2. **Message Selection**: The element selection might be picking up messages in wrong order
+3. **Sorting Issue**: Messages might be getting sorted incorrectly before limiting
+4. **Discord DOM Structure**: Discord's lazy loading might be serving different content based on scroll position
+
+### Current Workaround
+- **Always use high `max_messages` count** (100+) when looking for recent messages
+- Cannot trust low message counts to show actual newest content
+
+### Fix Required
+The message extraction logic in `get_channel_messages()` needs investigation to ensure:
+1. Proper scroll positioning reaches absolute newest messages first
+2. Message elements are selected in correct chronological order
+3. Sorting and limiting happens correctly
+
+This is a **critical reliability issue** that affects the core functionality of reading recent messages.
