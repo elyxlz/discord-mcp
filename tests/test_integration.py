@@ -33,7 +33,9 @@ async def test_mcp_get_servers_tool(real_config):
             audiogen_server = server
             break
 
-    assert audiogen_server is not None, "Audiogen Company server should be found via MCP"
+    assert audiogen_server is not None, (
+        "Audiogen Company server should be found via MCP"
+    )
     assert audiogen_server["id"] == "1353689257796960296"
     print(f"Found Audiogen Company server: {audiogen_server['name']}")
 
@@ -71,12 +73,20 @@ async def test_mcp_get_channels_tool(real_config):
 @pytest.mark.asyncio
 async def test_mcp_read_messages_tool(real_config):
     """Test the read_messages MCP tool."""
-    test_channel_id = "1353689257796960299"  # Use Audiogen channel
+    audiogen_server_id = "1353689257796960296"
+    test_channel_id = "1353694097696755766"  # Use Audiogen general channel
 
     # Test read_messages tool
-    print(f"Testing MCP message reading from channel ID: {test_channel_id}")
+    print(
+        f"Testing MCP message reading from server {audiogen_server_id}, channel {test_channel_id}"
+    )
     result = await call_tool(
-        "read_messages", {"channel_id": test_channel_id, "max_messages": 5}
+        "read_messages",
+        {
+            "server_id": audiogen_server_id,
+            "channel_id": test_channel_id,
+            "max_messages": 5,
+        },
     )
 
     assert isinstance(result, list)
@@ -100,20 +110,28 @@ async def test_mcp_read_messages_tool(real_config):
 @pytest.mark.asyncio
 async def test_mcp_send_message_tool(real_config):
     """Test the send_message MCP tool."""
-    audiogen_channel_id = "1353689257796960299"
+    audiogen_server_id = "1353689257796960296"
+    audiogen_channel_id = "1353694097696755766"
     test_message = "hi from discord mcp"
 
     # Test send_message tool
-    print(f"Testing MCP message sending to channel ID: {audiogen_channel_id}")
+    print(
+        f"Testing MCP message sending to server {audiogen_server_id}, channel {audiogen_channel_id}"
+    )
     result = await call_tool(
-        "send_message", {"channel_id": audiogen_channel_id, "content": test_message}
+        "send_message",
+        {
+            "server_id": audiogen_server_id,
+            "channel_id": audiogen_channel_id,
+            "content": test_message,
+        },
     )
 
     assert isinstance(result, list)
     assert len(result) == 1
 
     response_data = json.loads(result[0].text)  # type: ignore
-    
+
     # Check if it's an error response
     if isinstance(response_data, dict) and "error" in response_data:
         print(f"Error in response: {response_data['error']}")

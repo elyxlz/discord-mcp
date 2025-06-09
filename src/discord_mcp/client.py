@@ -431,24 +431,29 @@ async def get_guild_channels(
 
 async def get_channel_messages(
     state: ClientState,
+    server_id: str,
     channel_id: str,
     limit: int = 100,
     before: str | None = None,
     after: str | None = None,
 ) -> tuple[ClientState, list[DiscordMessage]]:
+    logger.debug(
+        f"get_channel_messages called for server {server_id}, channel {channel_id}, limit {limit}"
+    )
     state = await _login(state)
     if not state.page:
+        logger.error("Browser page not initialized after login")
         raise RuntimeError("Browser page not initialized")
+    logger.debug("Login completed for get_channel_messages")
 
-    guild_id = await _find_guild_for_channel(state, channel_id)
-    if not guild_id:
-        raise RuntimeError(f"Could not find guild for channel {channel_id}")
-
+    logger.debug("Navigating directly to channel URL")
     await state.page.goto(
-        f"https://discord.com/channels/{guild_id}/{channel_id}",
+        f"https://discord.com/channels/{server_id}/{channel_id}",
         wait_until="domcontentloaded",
     )
+    logger.debug("Channel page loaded, waiting for chat messages")
     await state.page.wait_for_selector('[data-list-id="chat-messages"]', timeout=10000)
+    logger.debug("Chat messages container found")
 
     messages = []
     collected = 0
@@ -528,45 +533,44 @@ async def get_channel_messages(
         else:
             break
 
+    logger.debug(
+        f"get_channel_messages completed, returning {len(messages[:limit])} messages"
+    )
     return state, messages[:limit]
 
 
-async def _find_guild_for_channel(state: ClientState, channel_id: str) -> str | None:
-    state, guilds = await get_guilds(state)
-    for guild in guilds:
-        try:
-            state, channels = await get_guild_channels(state, guild.id)
-            if any(c.id == channel_id for c in channels):
-                return guild.id
-        except Exception:
-            continue
-    return None
-
-
 async def send_message(
-    state: ClientState, channel_id: str, content: str
+    state: ClientState, server_id: str, channel_id: str, content: str
 ) -> tuple[ClientState, str]:
+    logger.debug(f"send_message called for server {server_id}, channel {channel_id}")
     state = await _login(state)
     if not state.page:
+        logger.error("Browser page not initialized after login")
         raise RuntimeError("Browser page not initialized")
+    logger.debug("Login completed for send_message")
 
-    guild_id = await _find_guild_for_channel(state, channel_id)
-    if not guild_id:
-        raise RuntimeError(f"Could not find guild for channel {channel_id}")
-
+    logger.debug("Navigating directly to channel URL")
     await state.page.goto(
-        f"https://discord.com/channels/{guild_id}/{channel_id}",
+        f"https://discord.com/channels/{server_id}/{channel_id}",
         wait_until="domcontentloaded",
     )
+    logger.debug("Channel page loaded, waiting for message input")
     await state.page.wait_for_selector('[data-slate-editor="true"]', timeout=10000)
+    logger.debug("Message input found")
 
     message_input = await state.page.query_selector('[data-slate-editor="true"]')
     if not message_input:
+        logger.error("Could not find message input element")
         raise RuntimeError("Could not find message input")
 
+    logger.debug(f"Filling message content: {content[:50]}...")
     await message_input.fill(content)
+    logger.debug("Pressing Enter to send message")
     await state.page.keyboard.press("Enter")
+    logger.debug("Message sent, waiting 1 second")
 
     await asyncio.sleep(1)
 
-    return state, f"sent-{int(datetime.now().timestamp())}"
+    message_id = f"sent-{int(datetime.now().timestamp())}"
+    logger.debug(f"send_message completed with ID: {message_id}")
+    return state, message_id

@@ -59,6 +59,10 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "server_id": {
+                        "type": "string",
+                        "description": "Discord server (guild) ID",
+                    },
                     "channel_id": {
                         "type": "string",
                         "description": "Discord channel ID",
@@ -74,7 +78,7 @@ async def list_tools() -> list[Tool]:
                         "default": 100,
                     },
                 },
-                "required": ["channel_id"],
+                "required": ["server_id", "channel_id"],
             },
         ),
         Tool(
@@ -83,6 +87,10 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "server_id": {
+                        "type": "string",
+                        "description": "Discord server (guild) ID",
+                    },
                     "channel_id": {
                         "type": "string",
                         "description": "Discord channel ID",
@@ -92,7 +100,7 @@ async def list_tools() -> list[Tool]:
                         "description": "Message content to send",
                     },
                 },
-                "required": ["channel_id", "content"],
+                "required": ["server_id", "channel_id", "content"],
             },
         ),
     ]
@@ -145,13 +153,16 @@ async def call_tool(name: str, arguments: dict[str, tp.Any]) -> list[TextContent
                 response = [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             elif name == "read_messages":
+                server_id = arguments["server_id"]
                 channel_id = arguments["channel_id"]
                 hours_back = arguments.get("hours_back", config.default_hours_back)
                 max_messages = arguments.get("max_messages", 100)
-                logger.debug(f"Executing read_messages tool for channel {channel_id}, {hours_back}h back, max {max_messages}")
+                logger.debug(
+                    f"Executing read_messages tool for server {server_id}, channel {channel_id}, {hours_back}h back, max {max_messages}"
+                )
 
                 client_state, messages = await read_recent_messages(
-                    client_state, channel_id, hours_back, max_messages
+                    client_state, server_id, channel_id, hours_back, max_messages
                 )
                 logger.debug(f"Retrieved {len(messages)} messages")
                 result = [
@@ -168,11 +179,14 @@ async def call_tool(name: str, arguments: dict[str, tp.Any]) -> list[TextContent
                 response = [TextContent(type="text", text=json.dumps(result, indent=2))]
 
             elif name == "send_message":
+                server_id = arguments["server_id"]
                 channel_id = arguments["channel_id"]
                 content = arguments["content"]
-                logger.debug(f"Executing send_message tool to channel {channel_id} with content: {content[:50]}...")
+                logger.debug(
+                    f"Executing send_message tool to server {server_id}, channel {channel_id} with content: {content[:50]}..."
+                )
                 client_state, message_id = await send_message(
-                    client_state, channel_id, content
+                    client_state, server_id, channel_id, content
                 )
                 logger.debug(f"Message sent successfully with ID: {message_id}")
                 result = {"message_id": message_id, "status": "sent"}
