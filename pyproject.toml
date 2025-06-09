@@ -12,6 +12,8 @@ dependencies = [
     "mcp>=1.9.3",
     "python-dotenv>=1.1.0",
     "typing-extensions>=4.14.0",
+    "pytest>=8.4.0",
+    "pytest-asyncio>=1.0.0",
 ]
 
 [project.scripts]

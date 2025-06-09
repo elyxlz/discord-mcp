@@ -62,6 +62,8 @@ source = { editable = "." }
 dependencies = [
     { name = "mcp" },
     { name = "playwright" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "python-dotenv" },
     { name = "typing-extensions" },
 ]
@@ -80,6 +82,8 @@ test = [
 requires-dist = [
     { name = "mcp", specifier = ">=1.9.3" },
     { name = "playwright", specifier = ">=1.52.0" },
+    { name = "pytest", specifier = ">=8.4.0" },
+    { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "typing-extensions", specifier = ">=4.14.0" },
 ]
