@@ -1,5 +1,4 @@
 import asyncio
-import re
 import pathlib as pl
 from datetime import datetime, timezone
 import dataclasses as dc
@@ -166,9 +165,11 @@ async def get_guilds(state: ClientState) -> tuple[ClientState, list[DiscordGuild
     if not state.page:
         raise RuntimeError("Browser page not initialized")
 
+    logger.debug("Starting guild detection process")
     await state.page.goto(
         "https://discord.com/channels/@me", wait_until="domcontentloaded"
     )
+    logger.debug(f"Navigated to Discord, current URL: {state.page.url}")
 
     # Wait for Discord to fully load guilds with text content
     try:
@@ -177,62 +178,71 @@ async def get_guilds(state: ClientState) -> tuple[ClientState, list[DiscordGuild
             state="visible",
             timeout=15000,
         )
-        # Give extra time for guild names to load
-        await state.page.wait_for_timeout(3000)
+        await state.page.wait_for_timeout(5000)
 
-        await state.page.wait_for_function(
-            """
+        # Scroll guild navigation to load all guilds
+        await state.page.evaluate("""
             () => {
-                const elements = document.querySelectorAll('[data-list-id="guildsnav"] [role="treeitem"]');
-                return Array.from(elements).some(el => 
-                    el.textContent?.trim() || el.getAttribute('aria-label')
-                );
+                const guildNav = document.querySelector('[data-list-id="guildsnav"]');
+                const container = guildNav?.closest('[class*="guilds"]') || guildNav?.parentElement;
+                if (container) {
+                    container.scrollTop = 0;
+                    return new Promise(resolve => {
+                        let scrolls = 0;
+                        const interval = setInterval(() => {
+                            container.scrollBy(0, 100);
+                            if (++scrolls >= 20 || container.scrollTop + container.clientHeight >= container.scrollHeight - 10) {
+                                clearInterval(interval);
+                                resolve();
+                            }
+                        }, 100);
+                    });
+                }
             }
-        """,
-            timeout=10000,
-        )
+        """)
+        await state.page.wait_for_timeout(2000)
     except Exception:
         pass
 
-    # Use JavaScript to extract guild information directly without clicking each one
+    # Extract guild information from navigation elements
     guilds_data = await state.page.evaluate("""
         () => {
             const guilds = [];
+            const treeItems = document.querySelectorAll('[data-list-id="guildsnav"] [role="treeitem"]');
             
-            // Look for guild elements with data-dnd-name
-            const elements = document.querySelectorAll('[data-list-id="guildsnav"] [data-dnd-name]:not([data-dnd-name="Private channels"])');
-            
-            elements.forEach(element => {
-                const text = element.textContent?.trim();
-                const ariaLabel = element.getAttribute('aria-label');
-                const displayText = text || ariaLabel || '';
-                
-                // Skip non-guild elements
-                if (!displayText || 
-                    displayText.toLowerCase().includes('direct messages') ||
-                    displayText.toLowerCase().includes('create') ||
-                    displayText.toLowerCase().includes('add') ||
-                    displayText.toLowerCase().includes('explore') ||
-                    displayText.toLowerCase().includes('download') ||
-                    displayText.toLowerCase().includes('discover') ||
-                    displayText.toLowerCase().includes('browse') ||
-                    displayText.toLowerCase().includes('join a server')) {
-                    return;
-                }
-                
-                // Try to find a link to extract guild ID
-                const link = element.querySelector('a[href*="/channels/"]') || element.closest('a[href*="/channels/"]');
-                if (link) {
-                    const href = link.getAttribute('href');
-                    const match = href.match(/\\/channels\\/([0-9]+)/);
-                    if (match && match[1] !== '@me') {
-                        const guildId = match[1];
-                        let guildName = displayText.replace(/^\\d+\\s+mentions?,\\s*/, '').trim();
+            treeItems.forEach(item => {
+                const listItemId = item.getAttribute('data-list-item-id');
+                if (listItemId?.startsWith('guildsnav___') && listItemId !== 'guildsnav___home') {
+                    const guildId = listItemId.replace('guildsnav___', '');
+                    if (/^[0-9]+$/.test(guildId)) {
+                        // Extract guild name from tree item text
+                        let guildName = null;
+                        const textElements = item.querySelectorAll('*');
+                        for (let elem of textElements) {
+                            const text = elem.textContent?.trim();
+                            if (text && text.length > 2 && text.length < 100 && 
+                                !text.includes('notification') && !text.includes('unread') &&
+                                !text.match(/^\\d+$/)) {
+                                guildName = text;
+                                break;
+                            }
+                        }
                         
-                        guilds.push({
-                            id: guildId,
-                            name: guildName
-                        });
+                        if (!guildName) {
+                            const fullText = item.textContent?.trim();
+                            if (fullText) {
+                                guildName = fullText.replace(/^\\d+\\s+mentions?,\\s*/, '').replace(/\\s+/g, ' ').trim();
+                            }
+                        }
+                        
+                        // Clean up mention prefixes
+                        if (guildName) {
+                            guildName = guildName.replace(/^\\d+\\s+mentions?,\\s*/, '').trim();
+                        }
+                        
+                        if (guildName && !guilds.some(g => g.id === guildId)) {
+                            guilds.push({ id: guildId, name: guildName });
+                        }
                     }
                 }
             });
@@ -241,66 +251,11 @@ async def get_guilds(state: ClientState) -> tuple[ClientState, list[DiscordGuild
         }
     """)
 
-    guild_elements = []
-    if len(guilds_data) == 0:
-        # Fallback: try clicking approach for a few elements
-        all_elements = await state.page.query_selector_all(
-            '[data-list-id="guildsnav"] [data-dnd-name]:not([data-dnd-name="Private channels"])'
-        )
-        guild_elements = all_elements[:5]  # Only try first 5 elements
-
     # Convert JavaScript results to DiscordGuild objects
     guilds = [
         DiscordGuild(id=guild_data["id"], name=guild_data["name"], icon=None)
         for guild_data in guilds_data
     ]
-
-    # If JavaScript approach didn't work, fall back to clicking approach (limited)
-    if len(guilds) == 0 and len(guild_elements) > 0:
-        for element in guild_elements:
-            try:
-                text_content = await element.text_content()
-                aria_label = await element.get_attribute("aria-label")
-                display_text = text_content or aria_label or ""
-
-                # Skip non-guild elements
-                if not display_text or any(
-                    skip_text in display_text.lower()
-                    for skip_text in [
-                        "direct messages",
-                        "create",
-                        "add a server",
-                        "explore",
-                        "download",
-                        "discover",
-                        "browse",
-                        "join a server",
-                        "create your server",
-                    ]
-                ):
-                    continue
-
-                await element.click()
-                await state.page.wait_for_timeout(500)
-
-                current_url = state.page.url
-                guild_match = re.search(r"/channels/([0-9]+)", current_url)
-
-                if guild_match and guild_match.group(1) != "@me":
-                    guild_id = guild_match.group(1)
-                    guild_name = display_text.strip()
-                    guild_name = re.sub(r"^\d+\s+mentions?,\s*", "", guild_name)
-                    guilds.append(DiscordGuild(id=guild_id, name=guild_name, icon=None))
-
-            except Exception:
-                continue
-
-    await state.page.goto(
-        "https://discord.com/channels/@me", wait_until="domcontentloaded"
-    )
-    await state.page.wait_for_selector(
-        '[data-list-id="guildsnav"] [role="treeitem"]', state="visible", timeout=10000
-    )
 
     return state, guilds
 

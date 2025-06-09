@@ -51,10 +51,13 @@ async def test_mcp_get_servers_tool(real_config):
             assert len(servers_data) > 0
             print(f"MCP server found {len(servers_data)} guilds")
 
+            # Print all servers found
+            for i, server in enumerate(servers_data):
+                print(f"Server {i + 1}: {server['name']} (ID: {server['id']})")
+
             # Should find some Discord server
             assert servers_data[0]["id"] is not None
             assert servers_data[0]["name"] is not None
-            print(f"Found server: {servers_data[0]['name']}")
 
 
 @pytest.mark.integration
