@@ -39,6 +39,7 @@ class ClientState:
     headless: bool = True
     playwright: Playwright | None = None
     browser: Browser | None = None
+    context: object | None = None  # BrowserContext
     page: Page | None = None
     logged_in: bool = False
     cookies_file: pl.Path = dc.field(
@@ -53,7 +54,7 @@ def create_client_state(
 
 
 async def _ensure_browser(state: ClientState) -> ClientState:
-    if state.playwright:
+    if state.playwright and state.browser and state.context and state.page:
         return state
 
     playwright = await async_playwright().start()
@@ -65,7 +66,9 @@ async def _ensure_browser(state: ClientState) -> ClientState:
     context = await browser.new_context(**ctx_kwargs)
     page = await context.new_page()
 
-    return dc.replace(state, playwright=playwright, browser=browser, page=page)
+    return dc.replace(
+        state, playwright=playwright, browser=browser, context=context, page=page
+    )
 
 
 async def _save_storage_state(state: ClientState) -> None:
@@ -152,12 +155,25 @@ async def _login(state: ClientState) -> ClientState:
 
 
 async def close_client(state: ClientState) -> None:
-    for resource, action in [(state.browser, "close"), (state.playwright, "stop")]:
+    # Close resources in reverse order: page -> context -> browser -> playwright
+    resources = [
+        (state.page, "close"),
+        (state.context, "close"),
+        (state.browser, "close"),
+        (state.playwright, "stop"),
+    ]
+
+    for resource, action in resources:
         try:
             if resource:
                 await getattr(resource, action)()
         except Exception:
             pass
+
+    # Force garbage collection to help cleanup
+    import gc
+
+    gc.collect()
 
 
 async def get_guilds(state: ClientState) -> tuple[ClientState, list[DiscordGuild]]:
