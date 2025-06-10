@@ -11,6 +11,7 @@ from .client import (
     get_guilds,
     get_guild_channels,
     send_message as send_discord_message,
+    close_client,
 )
 from .config import load_config
 from .messages import read_recent_messages
@@ -42,8 +43,12 @@ async def _execute_with_fresh_client[T](
         client_state = create_client_state(
             discord_ctx.config.email, discord_ctx.config.password, True
         )
-        _, result = await operation(client_state)
-        return result
+        try:
+            _, result = await operation(client_state)
+            return result
+        finally:
+            logger.debug("Cleaning up browser resources")
+            await close_client(client_state)
 
 
 mcp = FastMCP("discord-mcp", lifespan=discord_lifespan)
