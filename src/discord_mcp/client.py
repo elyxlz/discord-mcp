@@ -286,79 +286,86 @@ async def get_guild_channels(
     await state.page.goto(
         f"https://discord.com/channels/{guild_id}", wait_until="domcontentloaded"
     )
-    await state.page.wait_for_selector(
-        f'a[href*="/channels/{guild_id}/"]', timeout=15000
-    )
+    await state.page.wait_for_timeout(3000)
 
-    current_url = state.page.url
-    if f"/channels/{guild_id}" not in current_url:
-        raise RuntimeError(f"Could not navigate to guild {guild_id}")
-    logger.debug("Extracting channel data using JavaScript")
-    channels_data = await state.page.evaluate(f"""
-        () => {{
-            const channels = [];
-            const guildId = '{guild_id}';
-
-            // Extract current channel if we're in one
-            const currentUrlMatch = window.location.href.match(/\\/channels\\/${{guildId}}\\/([0-9]+)/);
-            if (currentUrlMatch) {{
-                const currentChannelId = currentUrlMatch[1];
-                const titleMatch = document.title.match(/#([^|]+)/);
-                const channelName = titleMatch ? titleMatch[1].trim() : 'unknown-channel';
-
-                channels.push({{
-                    id: currentChannelId,
-                    name: channelName,
-                    href: window.location.href
-                }});
-            }}
-
-            // Find all channel links
-            const seenIds = new Set();
-            const allElements = document.querySelectorAll('a[href*="/channels/"]');
-
-            for (let element of allElements) {{
-                const href = element.href;
-                if (href) {{
-                    const match = href.match(/\\/channels\\/([0-9]+)\\/([0-9]+)/);
-                    if (match && match[1] === guildId) {{
-                        const channelId = match[2];
-
+    # Helper function to extract channels
+    def extract_channels_js() -> str:
+        return f"""
+            (() => {{
+                const channels = [];
+                const seenIds = new Set();
+                const links = document.querySelectorAll('a[href*="/channels/"]');
+                
+                links.forEach(link => {{
+                    const match = link.href.match(/\\/channels\\/{guild_id}\\/([0-9]+)/);
+                    if (match) {{
+                        const channelId = match[1];
                         if (!seenIds.has(channelId)) {{
                             seenIds.add(channelId);
-                            let channelName = element.textContent?.trim() || '';
-
-                            channelName = channelName.replace(/^[^a-zA-Z0-9#-_]+/, '').trim();
-                            channelName = channelName.replace(/\\s+/g, ' ').trim();
-
-                            if (channelName && channelName.length > 0 && !channelName.includes('undefined')) {{
-                                channels.push({{
-                                    id: channelId,
-                                    name: channelName,
-                                    href: href
-                                }});
-                            }}
+                            let name = link.textContent?.trim() || '';
+                            name = name.replace(/^[^a-zA-Z0-9#-_]+/, '').trim();
+                            name = name.replace(/\\s+/g, ' ').trim();
+                            channels.push({{
+                                id: channelId,
+                                name: name || `channel-${{channelId}}`,
+                                href: link.href
+                            }});
                         }}
                     }}
-                }}
-            }}
+                }});
+                return channels;
+            }})()
+        """
 
-            return channels;
-        }}
-    """)
+    # Step 1: Get original channels
+    logger.debug("Getting original channels")
+    original_channels = await state.page.evaluate(extract_channels_js())
+    logger.debug(f"Found {len(original_channels)} original channels")
 
-    logger.debug(f"JavaScript extraction returned {len(channels_data)} channels")
-    channels = [
-        DiscordChannel(
-            id=channel_data["id"],
-            name=channel_data["name"],
-            type=0,
-            guild_id=guild_id,
+    # Step 2: Click Browse Channels and get additional channels
+    browse_channels = []
+    try:
+        browse_element = await state.page.query_selector(
+            '*:has-text("Browse Channels")'
         )
-        for channel_data in channels_data
+        if browse_element and await browse_element.is_visible():
+            await browse_element.click()
+            await state.page.wait_for_timeout(5000)
+            logger.debug("Clicked Browse Channels")
+
+            # Scroll all scrollable elements to load hidden channels
+            await state.page.evaluate("""
+                Array.from(document.querySelectorAll('*'))
+                    .filter(el => el.scrollHeight > el.clientHeight + 5)
+                    .forEach(el => el.scrollTop = el.scrollHeight)
+            """)
+            await state.page.wait_for_timeout(3000)
+
+            browse_channels = await state.page.evaluate(extract_channels_js())
+            logger.debug(f"Found {len(browse_channels)} browse channels")
+    except Exception as e:
+        logger.debug(f"Browse Channels failed: {e}")
+
+    # Step 3: Combine channels (original first, then new browse channels)
+    all_channels = {}
+    final_channels = []
+
+    # Add original channels first
+    for ch in original_channels:
+        all_channels[ch["id"]] = ch
+        final_channels.append(ch)
+
+    # Add new browse channels
+    for ch in browse_channels:
+        if ch["id"] not in all_channels:
+            final_channels.append(ch)
+
+    logger.debug(f"Total unique channels: {len(final_channels)}")
+
+    channels = [
+        DiscordChannel(id=ch["id"], name=ch["name"], type=0, guild_id=guild_id)
+        for ch in final_channels
     ]
-    logger.debug(f"Created {len(channels)} DiscordChannel objects")
-    logger.debug(f"get_guild_channels completed successfully for guild {guild_id}")
 
     return state, channels
 
